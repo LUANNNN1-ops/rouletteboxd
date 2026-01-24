@@ -1,5 +1,7 @@
 # rouletteboxd
 
+![preview](assets/preview.png)
+
 don't know what to watch? press r to roll. picks a random film from any watchlist or list.
 
 ### how to install
