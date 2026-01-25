@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         rouletteboxd
 // @namespace    http://tampermonkey.net/
-// @version      7.3.0
+// @version      7.3.1
 // @description  don't know what to watch? press r to roll.
 // @author       kewwwal
 // @match        https://letterboxd.com/*
@@ -478,7 +478,7 @@
   function show(el, m) {
       unmark();
       const pd = getPoster(el);
-      const s1 = pd.src || "https://s.ltrbxd.com/static/img/empty-poster-230.png";
+      const s1 = pd.src || "https://a.ltrbxd.com/resized/film-poster/1/4/5/6/3/4/6/1456346-the-original-story-of-zafer-uzegul-0-1000-0-1500-crop.jpg";
       window.ROULETTE.src = s1;
 
       let fin = s1;
