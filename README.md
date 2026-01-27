@@ -15,7 +15,7 @@ don't know what to watch? press r to roll. picks a random film from any watchlis
 4. watch the movie (or don't, i'm not a cop).
 
 ### known issues
-filtering for unreleased and watched movies is currently broken.
+none (i think)
 
 ### credits
 inspired by [gatleos/letterboxd-roulette](https://github.com/Gatleos/letterboxd-roulette) but rewritten from scratch for better ui, security, and performance.

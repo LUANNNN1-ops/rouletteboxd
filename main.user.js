@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         rouletteboxd
 // @namespace    http://tampermonkey.net/
-// @version      7.3.1
+// @version      7.4
 // @description  don't know what to watch? press r to roll.
 // @author       kewwwal
 // @match        https://letterboxd.com/*
@@ -14,116 +14,115 @@
 (function () {
   "use strict";
 
-  const MAX_RETRY = 3;
-  const MAX_REDIR = 15;
+  const CONFIG = {
+    MAX_RETRY: 3,
+    SEL_CLASS: "roulette-highlight",
+    ACT_CLASS: "roulette-mode-active",
+    OVERLAY_ID: "roulette-overlay",
+    STYLE_ID: "roulette-style",
+    FALLBACK_IMG: "https://a.ltrbxd.com/resized/film-poster/1/4/5/6/3/4/6/1456346-the-original-story-of-zafer-uzegul-0-1000-0-1500-crop.jpg",
+    TIMEOUT_FALLBACK: 0
+  };
 
   window.ROULETTE = {
     active: false,
     spin: false,
     timer: null,
     img: null,
-    src: null
+    src: null,
+    ready: false,
+    currentMarked: null
   };
-
-  const SEL = "roulette-highlight";
-  const ACT = "roulette-mode-active";
-  const PARAM = "auto_spin";
-  const KEY = "roulette_retry";
-  const ID = "roulette-winner-overlay";
-
-  const url = new URL(window.location.href);
-  let auto = false;
-  if (url.searchParams.has(PARAM)) {
-      auto = true;
-      url.searchParams.delete(PARAM);
-      window.history.replaceState({}, document.title, url.toString());
-  } else {
-      sessionStorage.setItem(KEY, "0");
-  }
 
   function isInput(el) {
     if (!el) return false;
-    const t = ["INPUT", "TEXTAREA", "SELECT"];
-    return t.includes(el.tagName) || el.isContentEditable;
+    const inputTags = ["INPUT", "TEXTAREA", "SELECT"];
+    return inputTags.includes(el.tagName) || el.isContentEditable;
   }
 
   function setMode(on) {
-      if (on) document.body.classList.add(ACT);
-      else document.body.classList.remove(ACT);
+      if (on) document.body.classList.add(CONFIG.ACT_CLASS);
+      else document.body.classList.remove(CONFIG.ACT_CLASS);
   }
 
   function mark(el) {
-    if (el) el.classList.add(SEL);
+    if (el) {
+        el.classList.add(CONFIG.SEL_CLASS);
+        window.ROULETTE.currentMarked = el;
+    }
   }
 
   function unmark() {
-    document.querySelectorAll("." + SEL).forEach(el => el.classList.remove(SEL));
+    if (window.ROULETTE.currentMarked) {
+        window.ROULETTE.currentMarked.classList.remove(CONFIG.SEL_CLASS);
+        window.ROULETTE.currentMarked = null;
+    } else {
+        document.querySelectorAll("." + CONFIG.SEL_CLASS).forEach(el => el.classList.remove(CONFIG.SEL_CLASS));
+    }
   }
 
-  function getPoster(el) {
-      const imgs = el.getElementsByTagName('img');
-      let img = null;
-      for (let i of imgs) {
-          if (i.width < 40 || i.classList.contains('avatar')) continue;
-          if (i.src && i.src.includes('empty-poster')) continue;
-          img = i; break;
+  function getPosterData(el) {
+      const images = el.getElementsByTagName('img');
+      let imgElement = null;
+      for (let img of images) {
+          if (img.width < 40 || img.classList.contains('avatar')) continue;
+          if (img.src && img.src.includes('empty-poster')) continue;
+          imgElement = img; break;
       }
       let src = null;
-      if (img) {
-          src = img.currentSrc || img.src;
-          if (!src && img.srcset) {
-               const p = img.srcset.split(',');
-               src = p[p.length - 1].trim().split(' ')[0];
+      if (imgElement) {
+          src = imgElement.currentSrc || imgElement.src;
+          if (!src && imgElement.srcset) {
+               const parts = imgElement.srcset.split(',');
+               src = parts[parts.length - 1].trim().split(' ')[0];
           }
       }
       if (!src) {
-          const div = el.querySelector('div[data-poster-url]');
-          if (div) {
-              const p = div.getAttribute('data-poster-url');
-              if(p && p.startsWith('http')) src = p;
+          const posterDiv = el.querySelector('div[data-poster-url]');
+          if (posterDiv) {
+              const url = posterDiv.getAttribute('data-poster-url');
+              if(url && url.startsWith('http')) src = url;
           }
       }
-      return { src, el: img };
+      return { src, el: imgElement };
   }
 
-  function bigUrl(src) {
+  function getHighResUrl(src) {
       if (!src) return null;
-      const c = src.split('?')[0];
-      if (c.match(/-0-\d+-0-\d+/)) {
-          return c.replace(/-0-\d+-0-\d+/, '-0-460-0-690');
+      const cleanSrc = src.split('?')[0];
+      if (cleanSrc.match(/-0-\d+-0-\d+/)) {
+          return cleanSrc.replace(/-0-\d+-0-\d+/, '-0-460-0-690');
       }
-      return c;
+      return cleanSrc;
   }
 
-  function parseTime(iso) {
-      if (!iso) return "";
-      let min = 0;
-      if (iso.match(/PT(\d+)M/)) {
-          min = parseInt(iso.match(/PT(\d+)M/)[1]);
-      } else if (iso.includes('H')) {
-          const hM = iso.match(/(\d+)H/);
-          const mM = iso.match(/(\d+)M/);
-          const h = hM ? parseInt(hM[1]) : 0;
-          const m = mM ? parseInt(mM[1]) : 0;
-          min = (h * 60) + m;
+  function parseDuration(isoString) {
+      if (!isoString) return "";
+      let totalMinutes = 0;
+      if (isoString.match(/PT(\d+)M/)) {
+          totalMinutes = parseInt(isoString.match(/PT(\d+)M/)[1]);
+      } else if (isoString.includes('H')) {
+          const hoursMatch = isoString.match(/(\d+)H/);
+          const minutesMatch = isoString.match(/(\d+)M/);
+          const hours = hoursMatch ? parseInt(hoursMatch[1]) : 0;
+          const minutes = minutesMatch ? parseInt(minutesMatch[1]) : 0;
+          totalMinutes = (hours * 60) + minutes;
       }
-      if (min > 0) {
-          const h = Math.floor(min / 60);
-          const m = min % 60;
-          if (h > 0) return `${h}h ${m}m`;
-          return `${m}m`;
+      if (totalMinutes > 0) {
+          const hours = Math.floor(totalMinutes / 60);
+          const minutes = totalMinutes % 60;
+          if (hours > 0) return `${hours}h ${minutes}m`;
+          return `${minutes}m`;
       }
       return "";
   }
 
-  function css() {
-    if (document.getElementById("roulette-style")) return;
-
-    const noise = `url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI0MDAiIGhlaWdodD0iNDAwIj48ZmlsdGVyIGlkPSJhIj48ZmVUdXJidWxlbmNlIGJhc2VGcmVxdWVuY3k9Ii44NSIgb2N0YXZlcz0iMyIgc3RpdGNoVGlsZXM9InN0aXRjaCIgdHlwZT0iZnJhY3RhbE5vaXNlIi8+PC9maWx0ZXI+PHJlY3Qgd2lkdGg9IjEwMCUiIGhlaWdodD0iMTAwJSIgZmlsdGVyPSJ1cmwoI2EpIiBvcGFjaXR5PSIwLjEiLz48L3N2Zz4=')`;
+  function injectStyles() {
+    if (document.getElementById(CONFIG.STYLE_ID)) return;
 
     const txt = `
-      li.${SEL} .poster,
-      div.${SEL} .poster {
+      li.${CONFIG.SEL_CLASS} .poster,
+      div.${CONFIG.SEL_CLASS} .poster {
         opacity: 1 !important;
         outline: 4px solid #00e054 !important;
         outline-offset: -1px !important;
@@ -131,13 +130,13 @@
         z-index: 9998;
         transform: scale(1.05);
       }
-      body.${ACT} .poster-list li:not(.${SEL}) .poster,
-      body.${ACT} .griditem:not(.${SEL}) .poster,
-      body.${ACT} li.film-detail:not(.${SEL}) .poster {
+      body.${CONFIG.ACT_CLASS} .poster-list li:not(.${CONFIG.SEL_CLASS}) .poster,
+      body.${CONFIG.ACT_CLASS} .griditem:not(.${CONFIG.SEL_CLASS}) .poster,
+      body.${CONFIG.ACT_CLASS} li.film-detail:not(.${CONFIG.SEL_CLASS}) .poster {
         opacity: 0.3 !important;
         transition: opacity 0.2s linear;
       }
-      #${ID} {
+      #${CONFIG.OVERLAY_ID} {
           position: fixed; top: 0; left: 0; width: 100%; height: 100%;
           background-color: rgba(16, 20, 24, 0.94);
           backdrop-filter: blur(14px);
@@ -148,10 +147,9 @@
           text-align: center; font-family: 'Graphik', Helvetica, Arial, sans-serif;
           overflow: hidden;
       }
-      #${ID}::before {
+      #${CONFIG.OVERLAY_ID}::before {
           content: ""; position: absolute;
           top: -100%; left: -100%; width: 300%; height: 300%;
-          background-image: ${noise}; opacity: 0.05;
           pointer-events: none; animation: n 8s steps(10) infinite; z-index: -1;
       }
       @keyframes n { 0%, 100% { transform: translate(0, 0); } 10% { transform: translate(-5%, -10%); } 50% { transform: translate(-15%, 10%); } 90% { transform: translate(-10%, 10%); } }
@@ -162,7 +160,7 @@
       }
       .r-close:hover { color: #fff; }
       .p-box { perspective: 1200px; margin-bottom: 30px; z-index: 1; padding: 20px; }
-      #${ID} .c-post {
+      #${CONFIG.OVERLAY_ID} .c-post {
           height: 55vh; max-width: 80vw;
           object-fit: contain; border-radius: 4px;
           box-shadow: 0 10px 40px rgba(0,0,0,0.6);
@@ -173,36 +171,36 @@
           animation: p 0.6s cubic-bezier(0.19, 1, 0.22, 1) forwards;
       }
       @keyframes p { from { transform: scale(0.9) translateY(20px); opacity:0; } to { transform: scale(1) translateY(0); opacity:1; } }
-      #${ID} .c-info {
+      #${CONFIG.OVERLAY_ID} .c-info {
           opacity: 0; animation: s 0.5s ease-out forwards; animation-delay: 0.2s;
           color: #fff; max-width: 800px; padding: 0 20px; z-index: 1;
       }
       @keyframes s { from { transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
-      #${ID} h1 {
+      #${CONFIG.OVERLAY_ID} h1 {
           font-family: 'Tiempos Headline', Georgia, serif; font-size: 2.8em; font-weight: 700;
           margin: 0 0 8px 0; line-height: 1.1; color: #ffffff; letter-spacing: -0.01em;
       }
-      #${ID} .meta {
+      #${CONFIG.OVERLAY_ID} .meta {
           font-family: 'Graphik', Helvetica, Arial, sans-serif; font-size: 1.15em;
           color: #ccddee; font-weight: 400; margin-bottom: 6px; text-transform: uppercase;
           letter-spacing: 0.05em; display: flex; align-items: center; justify-content: center;
           gap: 10px; flex-wrap: wrap;
       }
-      #${ID} .meta span.sep { color: #445566; font-size: 0.8em; }
-      #${ID} .rate { color: #00e054; font-weight: 500; display: inline-flex; align-items: center; }
-      #${ID} .star { color: #00e054; font-size: 1.35em; margin-right: 4px; line-height: 1; position: relative; top: -1px; }
-      #${ID} .gen {
+      #${CONFIG.OVERLAY_ID} .meta span.sep { color: #445566; font-size: 0.8em; }
+      #${CONFIG.OVERLAY_ID} .rate { color: #00e054; font-weight: 500; display: inline-flex; align-items: center; }
+      #${CONFIG.OVERLAY_ID} .star { color: #00e054; font-size: 1.35em; margin-right: 4px; line-height: 1; position: relative; top: -1px; }
+      #${CONFIG.OVERLAY_ID} .gen {
           font-family: 'Graphik', Helvetica, Arial, sans-serif; font-size: 0.95em;
           color: #778899; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 30px;
       }
-      #${ID} .act-btn {
+      #${CONFIG.OVERLAY_ID} .act-btn {
           padding: 16px 50px; background: #00e054; color: #ffffff !important;
           font-family: 'Graphik', Helvetica, Arial, sans-serif; font-size: 14px;
           font-weight: 700; border-radius: 3px; text-decoration: none; text-transform: uppercase;
           letter-spacing: 0.12em; transition: all 0.2s ease; display: inline-block;
           cursor: pointer; border: none; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
       }
-      #${ID} .act-btn:hover {
+      #${CONFIG.OVERLAY_ID} .act-btn:hover {
           background: #00d04f; color: #ffffff !important; box-shadow: 0 6px 25px rgba(0, 0, 0, 0.35);
       }
       .hint {
@@ -212,446 +210,444 @@
       .hint:hover { color: rgba(255, 255, 255, 0.8); }
     `;
 
-    const s = document.createElement("style");
-    s.id = "roulette-style";
-    s.textContent = txt;
-    (document.head || document.documentElement).appendChild(s);
+    const style = document.createElement("style");
+    style.id = CONFIG.STYLE_ID;
+    style.textContent = txt;
+    (document.head || document.documentElement).appendChild(style);
   }
 
-  function getLink(el) {
-      const a = el.querySelector('a[href^="/film/"]');
-      if (a) return a.href;
-      const d = el.querySelector('div[data-item-link]');
-      if (d) return "https://letterboxd.com" + d.getAttribute('data-item-link');
+  function getFilmLink(el) {
+      const anchor = el.querySelector('a[href^="/film/"]');
+      if (anchor) return anchor.href;
+      const itemDiv = el.querySelector('div[data-item-link]');
+      if (itemDiv) return "https://letterboxd.com" + itemDiv.getAttribute('data-item-link');
       return null;
   }
 
-  async function fetchUrl(u, n = 0) {
+  async function fetchUrl(url, retryCount = 0) {
       try {
-          const r = await fetch(u);
-          if (!r.ok) throw new Error('HTTP Error');
-          const t = await r.text();
-          return new DOMParser().parseFromString(t, 'text/html');
+          const response = await fetch(url);
+          if (!response.ok) throw new Error('HTTP Error');
+          const text = await response.text();
+          return new DOMParser().parseFromString(text, 'text/html');
       } catch (e) {
-          if (n < MAX_RETRY) {
-              await new Promise(r => setTimeout(r, 500));
-              return fetchUrl(u, n + 1);
+          if (retryCount < CONFIG.MAX_RETRY) {
+              const delay = 500 * Math.pow(2, retryCount);
+              await new Promise(r => setTimeout(r, delay));
+              return fetchUrl(url, retryCount + 1);
           }
           throw e;
       }
   }
 
-  async function getMeta(u) {
-      let d = { dir: "", rate: "", year: "", date: null, time: "", gen: "" };
+  const metadataCache = new Map();
+
+  async function getMetaData(url) {
+      if (metadataCache.has(url)) return metadataCache.get(url);
+
+      let metadata = { dir: "", rate: "", year: "", date: null, time: "", gen: "" };
       try {
-          const doc = await fetchUrl(u);
-          const jLd = doc.querySelector('script[type="application/ld+json"]');
-          let j = null;
-          if (jLd) { try { j = JSON.parse(jLd.textContent); } catch(e){} }
+          const doc = await fetchUrl(url);
+          const jsonLdScript = doc.querySelector('script[type="application/ld+json"]');
+          let jsonData = null;
+          if (jsonLdScript) { try { jsonData = JSON.parse(jsonLdScript?.textContent); } catch(e){} }
 
-          if (j && j.genre) {
-              const g = Array.isArray(j.genre) ? j.genre : [j.genre];
-              d.gen = g.slice(0, 3).join(" / ");
+          if (jsonData && jsonData.genre) {
+              const genres = Array.isArray(jsonData.genre) ? jsonData.genre : [jsonData.genre];
+              metadata.gen = genres.slice(0, 3).join(" / ");
           }
-          if (!d.gen) {
-              const l = doc.querySelectorAll('.text-sluglist.capitalize a.text-slug[href*="/films/genre/"]');
-              if (l && l.length > 0) d.gen = Array.from(l).slice(0, 3).map(a => a.innerText).join(" / ");
+          if (!metadata.gen) {
+              const links = doc.querySelectorAll('.text-sluglist.capitalize a.text-slug[href*="/films/genre/"]');
+              if (links && links.length > 0) metadata.gen = Array.from(links).slice(0, 3).map(a => a.innerText).join(" / ");
           }
 
-          if (j && j.datePublished) {
-              d.year = j.datePublished.substring(0, 4);
-              d.date = j.datePublished;
+          if (jsonData && jsonData.datePublished) {
+              metadata.year = jsonData.datePublished.substring(0, 4);
+              metadata.date = jsonData.datePublished;
           } else {
-              const y = doc.querySelector('.film-header .releaseyear a');
-              if (y) d.year = y.innerText;
+              const yearEl = doc.querySelector('.film-header .releaseyear a');
+              if (yearEl) metadata.year = yearEl?.innerText;
           }
 
-          if (j && j.director) {
-              const ds = Array.isArray(j.director) ? j.director : [j.director];
-              d.dir = ds.map(o => o.name).join(", ");
+          if (jsonData && jsonData.director) {
+              const directors = Array.isArray(jsonData.director) ? jsonData.director : [jsonData.director];
+              metadata.dir = directors.map(o => o.name).join(", ");
           } else {
-              const m = doc.querySelector('meta[name="twitter:data1"]');
-              if (m) d.dir = m.content;
+              const metaDir = doc.querySelector('meta[name="twitter:data1"]');
+              if (metaDir) metadata.dir = metaDir?.content;
           }
 
-          if (j && j.aggregateRating && j.aggregateRating.ratingValue) {
-              d.rate = parseFloat(j.aggregateRating.ratingValue).toFixed(1);
+          if (jsonData && jsonData.aggregateRating && jsonData.aggregateRating.ratingValue) {
+              metadata.rate = parseFloat(jsonData.aggregateRating.ratingValue).toFixed(1);
           } else {
-              const m = doc.querySelector('meta[name="twitter:data2"]');
-              if (m && m.content) {
-                  const x = m.content.match(/^([\d.]+)/);
-                  if (x) d.rate = parseFloat(x[1]).toFixed(1);
+              const metaRate = doc.querySelector('meta[name="twitter:data2"]');
+              if (metaRate && metaRate.content) {
+                  const match = metaRate.content.match(/^([\d.]+)/);
+                  if (match) metadata.rate = parseFloat(match[1]).toFixed(1);
               }
           }
 
-          if (j && j.duration) d.time = parseTime(j.duration);
-          if (!d.time) {
-              const f = doc.querySelector('.text-footer');
-              if (f) {
-                  const x = f.innerText.match(/(\d+)\s+mins/);
-                  if (x) {
-                      const m = parseInt(x[1]);
+          if (jsonData && jsonData.duration) metadata.time = parseDuration(jsonData.duration);
+          if (!metadata.time) {
+              const footer = doc.querySelector('.text-footer');
+              if (footer) {
+                  const match = footer.innerText.match(/(\d+)\s+mins/);
+                  if (match) {
+                      const m = parseInt(match[1]);
                       const h = Math.floor(m / 60);
                       const mm = m % 60;
-                      d.time = (h > 0) ? `${h}h ${mm}m` : `${mm}m`;
+                      metadata.time = (h > 0) ? `${h}h ${mm}m` : `${mm}m`;
                   }
               }
           }
-      } catch (e) { console.warn("Meta fail:", e); }
-      return d;
-  }
-
-  async function check(el) {
-      const l = getLink(el);
-      const m = l ? await getMeta(l) : {dir:"", rate:"", year:"", date: null, time:"", gen:""};
-
-      if (m.date) {
-          const rel = new Date(m.date);
-          const now = new Date();
-          rel.setHours(0,0,0,0);
-          now.setHours(0,0,0,0);
-          if (rel > now) {
-              console.warn(`Unreleased. Rerrolling...`);
-              run();
-              return;
-          }
+      } catch (e) {
+          console.warn("Metadata fetch failed for", url, e);
       }
-      show(el, m);
+
+      metadataCache.set(url, metadata);
+      return metadata;
   }
 
-  function close() {
-      const o = document.getElementById(ID);
-      if (o) o.remove();
+  async function showDialog(el) {
+      const link = getFilmLink(el);
+      const metadata = link ? await getMetaData(link) : {dir:"", rate:"", year:"", date: null, time:"", gen:""};
+      renderOverlay(el, metadata);
+  }
+
+  function closeOverlay() {
+      const overlay = document.getElementById(CONFIG.OVERLAY_ID);
+      if (overlay) overlay.remove();
       unmark();
       setMode(false);
       window.ROULETTE.spin = false;
       if (window.ROULETTE.timer) clearTimeout(window.ROULETTE.timer);
       window.ROULETTE.img = null;
       window.ROULETTE.src = null;
-      sessionStorage.setItem(KEY, "0");
   }
 
-  function err(t) {
-      const o = document.createElement('div');
-      o.id = ID;
-      document.body.appendChild(o);
+  function renderError(text) {
+      const overlay = document.createElement('div');
+      overlay.id = CONFIG.OVERLAY_ID;
+      document.body.appendChild(overlay);
 
-      const c = document.createElement('div');
-      c.className = "r-close";
-      c.textContent = "×";
-      o.appendChild(c);
+      const closebutton = document.createElement('div');
+      closebutton.className = "r-close";
+      closebutton.textContent = "×";
+      overlay.appendChild(closebutton);
 
-      const i = document.createElement('div');
-      i.className = "c-info";
-      o.appendChild(i);
+      const infoContainer = document.createElement('div');
+      infoContainer.className = "c-info";
+      infoContainer.style.maxWidth = "600px";
+      overlay.appendChild(infoContainer);
 
-      const h = document.createElement('h1');
-      h.style.color = "#ff5050";
-      h.textContent = "⚠️ Error";
-      i.appendChild(h);
+      const gremlinImg = document.createElement('img');
+      gremlinImg.src = "https://raw.githubusercontent.com/kewwwal/rouletteboxd/main/assets/gremlin.png";
+      gremlinImg.style.cssText = "height: 240px; width: auto; display: block; margin: 0 auto 30px auto; filter: drop-shadow(0 10px 15px rgba(0,0,0,0.5));";
+      gremlinImg.alt = "Gremlin";
+      infoContainer.appendChild(gremlinImg);
 
-      const p = document.createElement('p');
-      p.style.cssText = "font-size:1.2em; color:#fff; margin-bottom:20px;";
-      p.textContent = t;
-      i.appendChild(p);
+      const heading = document.createElement('h1');
+      heading.style.color = "#ffffff";
+      heading.textContent = "No Films Found";
+      infoContainer.appendChild(heading);
 
-      const b = document.createElement('div');
-      b.className = "act-btn";
-      b.textContent = "TRY AGAIN";
-      i.appendChild(b);
+      const para = document.createElement('p');
+      para.style.cssText = "font-size:1.2em; color:#9ab; margin-bottom:30px; line-height: 1.5; font-family: 'Graphik', Helvetica, Arial, sans-serif;";
+      para.textContent = text;
+      infoContainer.appendChild(para);
 
-      c.onclick = close;
-      b.onclick = () => { close(); run(); };
+      const actionBtn = document.createElement('div');
+      actionBtn.className = "act-btn";
+      actionBtn.textContent = "CLOSE";
+      infoContainer.appendChild(actionBtn);
+
+      closebutton.onclick = closeOverlay;
+      actionBtn.onclick = closeOverlay;
   }
 
-  function mkBtn(p) {
-      const b = document.createElement('div');
-      b.className = "r-close";
-      b.textContent = "×";
-      b.setAttribute("role", "button");
-      b.setAttribute("tabindex", "0");
-      b.setAttribute("aria-label", "Close");
-      b.onclick = close;
-      b.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); }};
-      p.appendChild(b);
+  function createCloseBtn(parent) {
+      const btn = document.createElement('div');
+      btn.className = "r-close";
+      btn.textContent = "×";
+      btn.setAttribute("role", "button");
+      btn.setAttribute("tabindex", "0");
+      btn.setAttribute("aria-label", "Close");
+      btn.onclick = closeOverlay;
+      btn.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); closeOverlay(); }};
+      parent.appendChild(btn);
   }
 
-  function mkPost(p, s) {
-      const c = document.createElement('div');
-      c.className = "p-box";
-      const i = document.createElement('img');
-      i.src = s;
-      i.className = "c-post";
-      i.alt = "Winner";
-      c.appendChild(i);
-      p.appendChild(c);
-      i.onerror = function() {
+  function createPosterDisplay(parentElement, imageSource) {
+      const posterContainer = document.createElement('div');
+      posterContainer.className = "p-box";
+      const posterImage = document.createElement('img');
+      posterImage.src = imageSource;
+      posterImage.className = "c-post";
+      posterImage.alt = "Winner";
+      posterContainer.appendChild(posterImage);
+      parentElement.appendChild(posterContainer);
+      posterImage.onerror = function() {
           this.src = window.ROULETTE.src;
           this.style.transform = "none";
           this.onerror = null;
       };
-      return { c, i };
+      return { container: posterContainer, posterimg: posterImage };
   }
 
-  function mkInfo(p, t, m, l) {
-      const d = document.createElement('div');
-      d.className = "c-info";
-      p.appendChild(d);
+  function createInfoPanel(parent, title, meta, link) {
+      const div = document.createElement('div');
+      div.className = "c-info";
+      parent.appendChild(div);
 
-      const h = document.createElement('h1');
-      h.textContent = t;
-      d.appendChild(h);
+      const h1 = document.createElement('h1');
+      h1.textContent = title;
+      div.appendChild(h1);
 
-      const md = document.createElement('div');
-      md.className = "meta";
-      d.appendChild(md);
+      const metaDiv = document.createElement('div');
+      metaDiv.className = "meta";
+      div.appendChild(metaDiv);
 
-      const span = (x, c) => {
+      const span = (text, cls) => {
           const s = document.createElement('span');
-          if (c) s.className = c;
-          s.textContent = x;
+          if (cls) s.className = cls;
+          s.textContent = text;
           return s;
       };
 
-      const arr = [];
-      if (m.dispYear) arr.push(span(m.dispYear));
-      if (m.time) arr.push(span(m.time));
-      if (m.dir) arr.push(span(`DIRECTED BY ${m.dir.toUpperCase()}`));
+      const items = [];
+      if (meta.dispYear) items.push(span(meta.dispYear));
+      if (meta.time) items.push(span(meta.time));
+      if (meta.dir) items.push(span(`DIRECTED BY ${meta.dir.toUpperCase()}`));
 
-      const rBox = document.createElement('span');
-      rBox.className = "rate";
-      rBox.setAttribute("aria-label", `Rating: ${m.rate}`);
-      const st = document.createElement('span');
-      st.className = "star";
-      st.textContent = "★";
-      rBox.appendChild(st);
-      rBox.appendChild(document.createTextNode(m.rate || "NO RATING"));
-      arr.push(rBox);
+      const rateBox = document.createElement('span');
+      rateBox.className = "rate";
+      rateBox.setAttribute("aria-label", `Rating: ${meta.rate}`);
+      const star = document.createElement('span');
+      star.className = "star";
+      star.textContent = "★";
+      rateBox.appendChild(star);
+      rateBox.appendChild(document.createTextNode(meta.rate || "NO RATING"));
+      items.push(rateBox);
 
-      arr.forEach((x, k) => {
-          md.appendChild(x);
-          if (k < arr.length - 1) md.appendChild(span("•", "sep"));
+      items.forEach((item, idx) => {
+          metaDiv.appendChild(item);
+          if (idx < items.length - 1) metaDiv.appendChild(span("•", "sep"));
       });
 
-      if (m.gen) {
-          const g = document.createElement('div');
-          g.className = "gen";
-          g.textContent = m.gen.toUpperCase();
-          d.appendChild(g);
+      if (meta.gen) {
+          const genreDiv = document.createElement('div');
+          genreDiv.className = "gen";
+          genreDiv.textContent = meta.gen.toUpperCase();
+          div.appendChild(genreDiv);
       }
 
-      const a = document.createElement('a');
-      a.href = l || "#";
-      a.className = "act-btn";
-      a.textContent = "DIVE IN";
-      a.setAttribute("role", "button");
-      d.appendChild(a);
-      setTimeout(() => a.focus(), 100);
+      const activeBtn = document.createElement('a');
+      activeBtn.href = link || "#";
+      activeBtn.className = "act-btn";
+      activeBtn.textContent = "DIVE IN";
+      activeBtn.setAttribute("role", "button");
+      div.appendChild(activeBtn);
+      setTimeout(() => activeBtn.focus(), 100);
 
-      const re = document.createElement('div');
-      re.className = "hint";
-      re.textContent = "Press R to Reroll";
-      re.setAttribute("role", "button");
-      re.setAttribute("tabindex", "0");
-      re.onclick = () => { close(); run(); };
-      re.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); close(); run(); }};
-      d.appendChild(re);
+      const hint = document.createElement('div');
+      hint.className = "hint";
+      hint.textContent = "Press R to Reroll";
+      hint.setAttribute("role", "button");
+      hint.setAttribute("tabindex", "0");
+      hint.onclick = () => { closeOverlay(); startRoulette(); };
+      hint.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); closeOverlay(); startRoulette(); }};
+      div.appendChild(hint);
   }
 
-  function tilt(c, i) {
-      if (!c || !i) return;
-      c.addEventListener('mousemove', (e) => {
-          const r = c.getBoundingClientRect();
-          const x = e.clientX - r.left;
-          const y = e.clientY - r.top;
-          const rx = ((y - r.height / 2) / (r.height / 2)) * -8;
-          const ry = ((x - r.width / 2) / (r.width / 2)) * 8;
-          i.style.transform = `scale(1.08) rotateX(${rx}deg) rotateY(${ry}deg)`;
-          i.style.boxShadow = `0 35px 70px rgba(0,0,0,0.9)`;
+  function applyTiltEffect(container, image) {
+      if (!container || !image) return;
+      container.addEventListener('mousemove', (e) => {
+          const rect = container.getBoundingClientRect();
+          const mouseX = e.clientX - rect.left;
+          const mouseY = e.clientY - rect.top;
+          const rx = ((mouseY - rect.height / 2) / (rect.height / 2)) * -8;
+          const ry = ((mouseX - rect.width / 2) / (rect.width / 2)) * 8;
+          image.style.transform = `scale(1.08) rotateX(${rx}deg) rotateY(${ry}deg)`;
+          image.style.boxShadow = `0 35px 70px rgba(0,0,0,0.9)`;
       });
-      c.addEventListener('mouseleave', () => {
-          i.style.transform = 'scale(1) rotateX(0) rotateY(0)';
-          i.style.boxShadow = `0 10px 40px rgba(0,0,0,0.6)`;
+      container.addEventListener('mouseleave', () => {
+          image.style.transform = 'scale(1) rotateX(0) rotateY(0)';
+          image.style.boxShadow = `0 10px 40px rgba(0,0,0,0.6)`;
       });
   }
 
-  function show(el, m) {
+  function renderOverlay(el, meta) {
       unmark();
-      const pd = getPoster(el);
-      const s1 = pd.src || "https://a.ltrbxd.com/resized/film-poster/1/4/5/6/3/4/6/1456346-the-original-story-of-zafer-uzegul-0-1000-0-1500-crop.jpg";
+      const posterData = getPosterData(el);
+      const s1 = posterData.src || CONFIG.FALLBACK_IMG;
       window.ROULETTE.src = s1;
 
-      let fin = s1;
+      let finalSrc = s1;
       if (window.ROULETTE.img && window.ROULETTE.img.complete && window.ROULETTE.img.naturalWidth > 0) {
-          fin = window.ROULETTE.img.src;
+          finalSrc = window.ROULETTE.img.src;
       } else {
-          const h = bigUrl(s1);
-          if (h) fin = h;
+          const highRes = getHighResUrl(s1);
+          if (highRes) finalSrc = highRes;
       }
 
-      let t = "Unknown";
-      if (pd.el && pd.el.alt) t = pd.el.alt;
-      t = t.replace(/^Poster for\s+/i, '');
+      let title = "Unknown";
+      if (posterData.el && posterData.el.alt) title = posterData.el.alt;
+      title = title.replace(/^Poster for\s+/i, '');
 
-      let dispYear = m.year;
-      const ym = t.match(/\((\d{4})\)$/);
-      if (ym) {
-          dispYear = ym[1];
-          t = t.replace(/\s\(\d{4}\)$/, '');
+      let dispYear = meta.year;
+      const yearMatch = title.match(/\((\d{4})\)$/);
+      if (yearMatch) {
+          dispYear = yearMatch[1];
+          title = title.replace(/\s\(\d{4}\)$/, '');
       }
 
-      const um = { ...m, dispYear };
-      const l = getLink(el);
+      const updatedMeta = { ...meta, dispYear };
+      const link = getFilmLink(el);
 
-      const o = document.createElement('div');
-      o.id = ID;
-      document.body.appendChild(o);
+      const overlay = document.createElement('div');
+      overlay.id = CONFIG.OVERLAY_ID;
+      document.body.appendChild(overlay);
 
-      mkBtn(o);
-      const { c, i } = mkPost(o, fin);
-      mkInfo(o, t, um, l);
-      tilt(c, i);
+      createCloseBtn(overlay);
+      const { container, posterimg } = createPosterDisplay(overlay, finalSrc);
+      createInfoPanel(overlay, title, updatedMeta, link);
+      applyTiltEffect(container, posterimg);
   }
 
-  function count() {
-    const i = document.querySelectorAll('.paginate-pages li.paginate-page');
-    return i.length > 0 ? (parseInt(i[i.length - 1].innerText, 10) || 1) : 1;
-  }
+  function getCandidates(strict = false) {
+    const posters = Array.from(document.querySelectorAll('div.film-poster'));
 
-  function curr() {
-    const m = window.location.pathname.match(/\/page\/(\d+)\//);
-    return m ? parseInt(m[1], 10) : 1;
-  }
+    if (posters.length === 0) return [];
 
-  function go(n) {
-    let p = window.location.pathname;
-    if (p.includes("/page/")) p = p.replace(/\/page\/\d+\//, `/page/${n}/`);
-    else {
-        if (!p.endsWith("/")) p += "/";
-        p += `page/${n}/`;
+    const readyItems = posters.filter(poster => poster.hasAttribute('data-watched'));
+
+    if (strict && readyItems.length === 0 && posters.length > 0) {
+        return [];
     }
-    const u = new URL(window.location.protocol + "//" + window.location.host + p + window.location.search);
-    u.searchParams.set(PARAM, "1");
-    window.location.href = u.toString();
-  }
 
-  function list() {
-    let ps = Array.from(document.querySelectorAll('div.film-poster')).map(d => d.closest('li')).filter(e => e);
-    if (document.body.classList.contains("hide-films-seen")) {
-      ps = ps.filter(e => !e.querySelector('.film-poster[data-watched="true"]') && !e.classList.contains("film-watched"));
-    }
-    const y = new Date().getFullYear();
-    return ps.filter(e => {
-        const d = getPoster(e);
-        let my = null;
-        if (d.el && d.el.alt) {
-            const m = d.el.alt.match(/\((\d{4})\)$/);
-            if (m) my = parseInt(m[1], 10);
+    const items = posters.map(poster => {
+        return {
+            posterDiv: poster,
+            listItem: poster.closest('li')
+        };
+    }).filter(pair => pair.listItem);
+
+    const unwatchedItems = items.filter(pair => {
+        const posterDiv = pair.posterDiv;
+
+        if (!posterDiv.hasAttribute('data-watched')) {
+             return false;
         }
-        return !(my && my > y);
+
+        let isWatched = false;
+
+        if (posterDiv.getAttribute('data-watched') === 'true') {
+            isWatched = true;
+        }
+
+        if (isWatched) {
+             return false;
+        }
+
+        return true;
     });
+
+    return unwatchedItems.map(pair => pair.listItem);
   }
 
-  function run() {
-      if(document.getElementById(ID)) close();
-      const tot = count();
-      const cur = curr();
-      const tar = Math.floor(Math.random() * tot) + 1;
-      console.log(`Target: ${tar}/${tot}`);
-      if (tar !== cur) go(tar);
-      else spin();
+  function triggerRoulette() {
+      if(document.getElementById(CONFIG.OVERLAY_ID)) closeOverlay();
+      startRoulette();
   }
 
-  function spin() {
+  function startRoulette() {
     if (window.ROULETTE.spin) return;
-    let rc = parseInt(sessionStorage.getItem(KEY) || "0", 10);
-    css();
+    injectStyles();
     setMode(true);
     window.ROULETTE.active = true;
 
-    const ps = list();
-    if (ps.length === 0) {
+    const candidates = getCandidates();
+
+    if (candidates.length === 0) {
         setMode(false);
-        if (rc >= MAX_REDIR) {
-            sessionStorage.setItem(KEY, "0");
-            err("No films found.");
-            return;
-        }
-        sessionStorage.setItem(KEY, (rc + 1).toString());
-        if (count() > 1) run();
-        else err("Empty page.");
+        renderError("We couldn't find any films on this page.");
         return;
     }
 
-    sessionStorage.setItem(KEY, "0");
     window.ROULETTE.spin = true;
 
-    const winIdx = Math.floor(Math.random() * ps.length);
-    const winEl = ps[winIdx];
+    const winIdx = Math.floor(Math.random() * candidates.length);
+    const winEl = candidates[winIdx];
 
-    const pd = getPoster(winEl);
-    const h = bigUrl(pd.src);
-    if (h) {
+    const posterData = getPosterData(winEl);
+    const highRes = getHighResUrl(posterData.src);
+    if (highRes) {
         window.ROULETTE.img = new Image();
-        window.ROULETTE.img.src = h;
+        window.ROULETTE.img.src = highRes;
     }
 
     let step = 0;
     const steps = Math.floor(Math.random() * 10) + 20;
-    let d = 35;
+    let delay = 35;
 
-    function next() {
+    function nextStep() {
         if (!window.ROULETTE.spin) return;
         unmark();
-        let p;
-        if (step >= steps) p = winIdx;
-        else p = Math.floor(Math.random() * ps.length);
+        let targetIdx;
+        if (step >= steps) targetIdx = winIdx;
+        else targetIdx = Math.floor(Math.random() * candidates.length);
 
-        const el = ps[p];
+        const el = candidates[targetIdx];
         if (el) {
             mark(el);
-            const b = (step >= steps - 5) ? "smooth" : "auto";
-            const bl = (step >= steps - 5) ? "center" : "nearest";
-            el.scrollIntoView({ behavior: b, block: bl, inline: "center" });
+            const behavior = (step >= steps - 5) ? "smooth" : "auto";
+            const block = (step >= steps - 5) ? "center" : "nearest";
+            el.scrollIntoView({ behavior: behavior, block: block, inline: "center" });
         }
 
         if (step < steps) {
             step++;
-            d = Math.floor(d * 1.12);
-            window.ROULETTE.timer = setTimeout(next, d);
+            delay = Math.floor(delay * 1.12);
+            window.ROULETTE.timer = setTimeout(nextStep, delay);
         } else {
             window.ROULETTE.spin = false;
-            check(winEl);
+            showDialog(winEl);
         }
     }
-    next();
+    nextStep();
   }
 
-  function wait() {
+  function init() {
       let tId = null;
-      const o = new MutationObserver((m, obs) => {
-          if (list().length > 0) {
-              obs.disconnect();
+      const obs = new MutationObserver((mutations, observer) => {
+          if (getCandidates(true).length > 0) {
+              observer.disconnect();
               if (tId) clearTimeout(tId);
-              spin();
+              window.ROULETTE.ready = true;
           }
       });
-      o.observe(document.body, { childList: true, subtree: true });
-      if (list().length > 0) {
-          o.disconnect();
-          spin();
+      obs.observe(document.body, { childList: true, subtree: true });
+      if (getCandidates(true).length > 0) {
+          obs.disconnect();
+          window.ROULETTE.ready = true;
       } else {
-          tId = setTimeout(() => { o.disconnect(); spin(); }, 10000);
+          tId = setTimeout(() => {
+              obs.disconnect();
+              window.ROULETTE.ready = true;
+          }, CONFIG.TIMEOUT_FALLBACK);
       }
   }
 
-  if (auto) wait();
+  init();
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "KeyR" && !e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey) {
       if (isInput(document.activeElement)) return;
-      run();
+      if (!window.ROULETTE.ready) {
+           return;
+      }
+      triggerRoulette();
     }
-    if (e.code === "Escape") close();
+    if (e.code === "Escape") closeOverlay();
   });
 })();
